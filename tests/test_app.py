@@ -1,4 +1,3 @@
-import base64
 import json
 from datetime import date
 from types import SimpleNamespace
@@ -7,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import auth, main
 from app.extractor import extract_invoice
 from app.sevdesk import BASE_URL, SevdeskClient, SevdeskError, build_invoice_payload
 
@@ -65,6 +64,16 @@ EXTRACTED = {
 }
 
 
+@pytest.fixture(autouse=True)
+def password(monkeypatch):
+    monkeypatch.setenv("APP_PASSWORD", "geheim")
+    auth._failures.clear()
+
+
+def login(http: TestClient, password: str = "geheim"):
+    return http.post("/login", data={"password": password}, follow_redirects=False)
+
+
 @pytest.fixture
 def client():
     captured = []
@@ -72,7 +81,9 @@ def client():
     claude = FakeClaude(EXTRACTED)
     main.app.dependency_overrides[main.get_sevdesk] = lambda: sevdesk
     main.app.dependency_overrides[main.get_claude] = lambda: claude
-    yield TestClient(main.app), captured, claude
+    http = TestClient(main.app)
+    assert login(http).headers["location"] == "/"
+    yield http, captured, claude
     main.app.dependency_overrides.clear()
 
 
@@ -136,12 +147,46 @@ def test_payload_requires_contact_and_positions():
         build_invoice_payload({"contact_id": 1, "positions": []}, 1)
 
 
-def test_password_protection(client, monkeypatch):
-    http, _, _ = client
-    monkeypatch.setenv("APP_PASSWORD", "geheim")
-    assert http.get("/").status_code == 401
+def test_requires_login():
+    http = TestClient(main.app)
     assert http.get("/healthz").status_code == 200
-    good = base64.b64encode(b"ich:geheim").decode()
-    assert http.get("/", headers={"Authorization": "Basic " + good}).status_code == 200
-    bad = base64.b64encode(b"ich:falsch").decode()
-    assert http.get("/", headers={"Authorization": "Basic " + bad}).status_code == 401
+    assert http.get("/", follow_redirects=False).headers["location"] == "/login"
+    assert http.post("/api/parse", json={"text": "x"}).status_code == 401
+    assert login(http, "falsch").headers["location"] == "/login?fehler=falsch"
+    assert http.get("/api/meta").status_code == 401
+    assert login(http).headers["location"] == "/"
+    assert http.get("/").status_code == 200
+
+
+def test_app_is_closed_without_password(monkeypatch):
+    monkeypatch.delenv("APP_PASSWORD")
+    http = TestClient(main.app)
+    assert http.get("/").status_code == 503
+    assert http.post("/api/invoice", json={}).status_code == 503
+
+
+def test_lockout_after_failed_attempts():
+    http = TestClient(main.app)
+    for _ in range(auth.MAX_FAILURES - 1):
+        assert login(http, "falsch").headers["location"] == "/login?fehler=falsch"
+    assert login(http, "falsch").headers["location"] == "/login?fehler=gesperrt"
+    # Auch das richtige Passwort wird während der Sperre abgelehnt.
+    assert login(http).headers["location"] == "/login?fehler=gesperrt"
+    assert http.get("/api/meta").status_code == 401
+
+
+def test_logout_and_password_change_end_session(client, monkeypatch):
+    http, _, _ = client
+    assert http.get("/").status_code == 200
+    monkeypatch.setenv("APP_PASSWORD", "neues-passwort")
+    assert http.get("/", follow_redirects=False).status_code == 303
+    monkeypatch.setenv("APP_PASSWORD", "geheim")
+    assert http.get("/").status_code == 200
+    http.post("/logout")
+    assert http.get("/", follow_redirects=False).headers["location"] == "/login"
+
+
+def test_forged_or_expired_session_rejected():
+    assert not auth.valid_session("9999999999.abc", "geheim")
+    assert not auth.valid_session(auth.make_session("geheim", now=0), "geheim")
+    assert auth.valid_session(auth.make_session("geheim"), "geheim")

@@ -3,6 +3,7 @@ services:
     name: sevdesk-rechnungs-diktat
     runtime: docker
     plan: free
+    region: frankfurt
     healthCheckPath: /healthz
     envVars:
       - key: SEVDESK_API_TOKEN

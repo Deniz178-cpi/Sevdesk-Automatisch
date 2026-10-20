@@ -1,39 +1,21 @@
 """Web-App: Rechnung diktieren -> Vorschau prüfen -> Entwurf in sevDesk anlegen."""
 
-import base64
 import os
-import secrets
 from functools import lru_cache
-from pathlib import Path
 
 import anthropic
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from app.auth import require_login, router as auth_router
 from app.extractor import ExtractionError, extract_invoice
+from app.paths import STATIC_DIR
 from app.sevdesk import SevdeskClient, SevdeskError
 
-STATIC_DIR = Path(__file__).parent / "static"
-
 app = FastAPI(title="sevDesk Rechnungs-Diktat")
-
-
-@app.middleware("http")
-async def password_protection(request: Request, call_next):
-    """HTTP-Basic-Auth, sobald APP_PASSWORD gesetzt ist (Benutzername beliebig)."""
-    password = os.environ.get("APP_PASSWORD")
-    if password and request.url.path != "/healthz":
-        given = ""
-        header = request.headers.get("authorization", "")
-        if header.lower().startswith("basic "):
-            try:
-                given = base64.b64decode(header[6:]).decode().split(":", 1)[-1]
-            except ValueError:
-                pass
-        if not secrets.compare_digest(given.encode(), password.encode()):
-            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Rechnungen"'})
-    return await call_next(request)
+app.middleware("http")(require_login)
+app.include_router(auth_router)
 
 
 @lru_cache

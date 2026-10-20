@@ -22,7 +22,7 @@ Was die App annimmt:
 |---|---|
 | **sevDesk API-Token** | sevDesk → Einstellungen → Benutzer → dein Benutzer → API-Token |
 | **Anthropic API-Key** | [console.anthropic.com](https://console.anthropic.com) → API Keys (Kosten pro Rechnung im Cent-Bereich) |
-| **Passwort für die App** | Frei wählbar. Schützt die App, da sie Zugriff auf deine Buchhaltung hat |
+| **Passwort für die App** | Frei wählbar, mindestens 16 Zeichen. Schützt die App, da sie Zugriff auf deine Buchhaltung hat |
 
 ## Online stellen (empfohlen, damit es auch am Handy geht)
 
@@ -30,10 +30,19 @@ Spracherkennung im Browser funktioniert nur über **HTTPS**. Am einfachsten geht
 
 1. Bei Render mit GitHub anmelden → **New → Blueprint** → dieses Repository wählen (`render.yaml` wird erkannt).
 2. Die drei Werte `SEVDESK_API_TOKEN`, `ANTHROPIC_API_KEY` und `APP_PASSWORD` eintragen → **Apply**.
-3. Die angezeigte Adresse (`https://….onrender.com`) am Handy öffnen. Benutzername beim Login ist egal, Passwort ist dein `APP_PASSWORD`.
+3. Die angezeigte Adresse (`https://….onrender.com`) am Handy öffnen und mit deinem `APP_PASSWORD` anmelden.
 4. Tipp: Auf dem Handy „Zum Home-Bildschirm hinzufügen“, dann ist die App wie eine normale App erreichbar.
 
 Hinweis: Im Gratis-Tarif schläft die App nach ca. 15 Minuten ohne Nutzung. Der erste Aufruf danach dauert dann etwa 30 Sekunden.
+
+## Sicherheit
+
+- **Ohne `APP_PASSWORD` bleibt die App gesperrt**, sie zeigt dann nur einen Hinweis an.
+- **Login:** Nach dem Login bleibst du 30 Tage angemeldet. Mit **Abmelden** (oben rechts) beendest du die Sitzung auf dem Gerät.
+- **Passwort ändern:** Ein neues `APP_PASSWORD` in Render meldet alle Geräte ab.
+- **Sperre:** Nach 5 falschen Passwörtern ist der Login für diese IP-Adresse 15 Minuten gesperrt.
+- **Nur Entwürfe:** Die App legt nur Rechnungsentwürfe an. Sie verschickt und löscht nichts.
+- **Serverstandort:** `render.yaml` stellt die Region auf Frankfurt, der Server läuft also in der EU.
 
 ## Lokal am PC starten
 
