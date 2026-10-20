@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: sevdesk-rechnungs-diktat
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: SEVDESK_API_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false

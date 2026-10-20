@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rechnung diktieren</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1d2330; --muted: #6b7280; --border: #dfe3ea;
+    --accent: #2f6fde; --accent-text: #ffffff; --danger: #d64545; --ok: #1f9d55; --warn-bg: #fff6db; --warn-text: #7a5b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1c2129; --text: #e7eaf0; --muted: #9aa3b2; --border: #2e3541;
+      --accent: #5b8ff0; --accent-text: #0d1117; --danger: #f07070; --ok: #4cc38a; --warn-bg: #3a3112; --warn-text: #f3d77a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; margin: 8px 0 16px; }
+  h2 { font-size: 1.1rem; margin: 0 0 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  textarea, input, select { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+  textarea { min-height: 130px; resize: vertical; }
+  label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 12px 16px; cursor: pointer; background: var(--border); color: var(--text); }
+  button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 140px; }
+  #mic { width: 100%; padding: 18px; font-size: 1.1rem; font-weight: 600; background: var(--accent); color: var(--accent-text); }
+  #mic.listening { background: var(--danger); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .75; } }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .hints { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
+  .hints ul { margin: 4px 0 0; padding-left: 18px; }
+  .pos { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 12px; margin-bottom: 10px; }
+  .pos-head { display: flex; justify-content: space-between; align-items: center; }
+  .pos-head button { padding: 6px 10px; background: transparent; color: var(--danger); }
+  .totals { text-align: right; margin-top: 12px; }
+  .totals strong { font-size: 1.15rem; }
+  .msg { padding: 10px 14px; border-radius: 8px; margin-top: 12px; }
+  .msg.error { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+  .msg.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .msg a { color: inherit; font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Rechnung diktieren</h1>
+
+  <section class="card">
+    <button id="mic" type="button">🎤 Diktat starten</button>
+    <p id="mic-hint" class="muted" hidden>Dein Browser unterstützt keine Spracherkennung. Nutze die Mikrofon-Taste deiner Handy-Tastatur oder tippe den Text.</p>
+    <label for="text">Was soll auf die Rechnung?</label>
+    <textarea id="text" placeholder="z. B. Rechnung an Bäckerei Müller, 5 Stunden Webdesign à 80 Euro und eine Pauschale Hosting 120 Euro, Leistungsdatum letzten Freitag, Zahlungsziel 14 Tage"></textarea>
+    <div class="row" style="margin-top:12px">
+      <button id="clear" type="button">Leeren</button>
+      <button id="parse" class="primary" type="button">Auswerten</button>
+    </div>
+    <div id="parse-msg"></div>
+  </section>
+
+  <section id="preview" class="card" hidden>
+    <h2>Vorschau – bitte prüfen</h2>
+    <div id="hints" class="hints" hidden></div>
+
+    <label for="contact">Kunde</label>
+    <select id="contact"></select>
+    <p id="spoken-customer" class="muted"></p>
+
+    <div class="row">
+      <div><label for="invoice_date">Rechnungsdatum</label><input id="invoice_date" type="date"></div>
+      <div><label for="delivery_date">Leistungsdatum</label><input id="delivery_date" type="date"></div>
+      <div><label for="time_to_pay">Zahlungsziel (Tage)</label><input id="time_to_pay" type="number" min="0" inputmode="numeric"></div>
+    </div>
+    <label for="header">Betreff (optional)</label>
+    <input id="header" type="text" placeholder="leer = sevDesk-Standard">
+
+    <h2 style="margin-top:18px">Positionen</h2>
+    <div id="positions"></div>
+    <button id="add-pos" type="button">+ Position</button>
+
+    <div class="totals">
+      <div class="muted">Netto: <span id="sum-net"></span> · USt.: <span id="sum-tax"></span></div>
+      <strong>Brutto: <span id="sum-gross"></span></strong>
+    </div>
+
+    <button id="create" class="primary" type="button" style="width:100%;margin-top:16px">Als Entwurf in sevDesk anlegen</button>
+    <div id="create-msg"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const euro = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" });
+let meta = { units: [], contacts: [] };
+let draft = null;
+
+// ---------- Spracherkennung ----------
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let listening = false;
+let baseText = "";
+
+if (!Recognition) {
+  $("mic").hidden = true;
+  $("mic-hint").hidden = false;
+} else {
+  recognition = new Recognition();
+  recognition.lang = "de-DE";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.onresult = (event) => {
+    let finalText = "", interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const r = event.results[i];
+      if (r.isFinal) finalText += r[0].transcript; else interim += r[0].transcript;
+    }
+    if (finalText) baseText = (baseText + " " + finalText).trim();
+    $("text").value = (baseText + " " + interim).trim();
+  };
+  recognition.onerror = (event) => {
+    if (event.error === "not-allowed") showMsg("parse-msg", "error", "Mikrofon-Zugriff wurde verweigert. Bitte in den Browser-Einstellungen erlauben.");
+  };
+  recognition.onend = () => {
+    // Manche Browser beenden die Erkennung nach einer Pause von selbst – dann weitermachen.
+    if (listening) { try { recognition.start(); } catch (e) { setListening(false); } }
+  };
+}
+
+function setListening(on) {
+  listening = on;
+  $("mic").classList.toggle("listening", on);
+  $("mic").textContent = on ? "⏹ Diktat beenden" : "🎤 Diktat starten";
+}
+
+$("mic").onclick = () => {
+  if (listening) { setListening(false); recognition.stop(); return; }
+  baseText = $("text").value.trim();
+  setListening(true);
+  recognition.start();
+};
+$("clear").onclick = () => { $("text").value = ""; baseText = ""; };
+
+// ---------- Hilfsfunktionen ----------
+function showMsg(target, kind, text, link) {
+  const box = $(target);
+  box.innerHTML = "";
+  if (!text) return;
+  const div = document.createElement("div");
+  div.className = "msg " + kind;
+  div.textContent = text;
+  if (link) {
+    div.append(" ");
+    const a = document.createElement("a");
+    a.href = link; a.target = "_blank"; a.rel = "noopener"; a.textContent = "In sevDesk öffnen →";
+    div.append(a);
+  }
+  box.append(div);
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail ? (typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail)) : "Fehler " + res.status);
+  return body;
+}
+
+function el(tag, props = {}, children = []) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+
+// ---------- Vorschau ----------
+function renderContacts() {
+  const select = $("contact");
+  select.innerHTML = "";
+  select.append(el("option", { value: "", textContent: "– Kunde auswählen –" }));
+  const matchIds = new Set((draft.contact_matches || []).map((c) => c.id));
+  if (matchIds.size) {
+    const group = el("optgroup", { label: "Passende Kunden" });
+    draft.contact_matches.forEach((c) => group.append(el("option", { value: c.id, textContent: c.name + (c.customerNumber ? " (" + c.customerNumber + ")" : "") })));
+    select.append(group);
+  }
+  const all = el("optgroup", { label: "Alle Kunden" });
+  meta.contacts
+    .filter((c) => !matchIds.has(c.id))
+    .sort((a, b) => a.name.localeCompare(b.name, "de"))
+    .forEach((c) => all.append(el("option", { value: c.id, textContent: c.name + (c.customerNumber ? " (" + c.customerNumber + ")" : "") })));
+  select.append(all);
+  select.value = draft.contact_id || "";
+  $("spoken-customer").textContent = draft.customer_name ? "Verstanden: „" + draft.customer_name + "“" : "Kein Kunde genannt.";
+}
+
+function positionCard(pos, index) {
+  const field = (label, input) => el("div", {}, [el("label", { textContent: label }), input]);
+  const update = (key, parse = (v) => v) => (e) => { pos[key] = parse(e.target.value); renderTotals(); };
+
+  const name = el("input", { type: "text", value: pos.name || "", oninput: update("name") });
+  const desc = el("input", { type: "text", value: pos.description || "", placeholder: "optional", oninput: update("description") });
+  const qty = el("input", { type: "number", step: "any", inputMode: "decimal", value: pos.quantity, oninput: update("quantity", Number) });
+  const price = el("input", { type: "number", step: "0.01", inputMode: "decimal", value: pos.price_net, oninput: update("price_net", Number) });
+  const unit = el("select", { onchange: update("unit_id", Number) }, meta.units.map((u) => el("option", { value: u.id, textContent: u.name })));
+  unit.value = pos.unit_id;
+  const tax = el("select", { onchange: update("tax_rate", Number) }, [19, 7, 0].map((r) => el("option", { value: r, textContent: r + " %" })));
+  tax.value = pos.tax_rate;
+  const remove = el("button", { type: "button", textContent: "Entfernen", onclick: () => { draft.positions.splice(index, 1); renderPositions(); } });
+
+  return el("div", { className: "pos" }, [
+    el("div", { className: "pos-head" }, [el("strong", { textContent: "Position " + (index + 1) }), remove]),
+    field("Bezeichnung", name),
+    field("Beschreibung", desc),
+    el("div", { className: "row" }, [field("Menge", qty), field("Einheit", unit), field("Netto-Preis (€)", price), field("USt.", tax)]),
+  ]);
+}
+
+function renderPositions() {
+  const box = $("positions");
+  box.innerHTML = "";
+  draft.positions.forEach((p, i) => box.append(positionCard(p, i)));
+  renderTotals();
+}
+
+function renderTotals() {
+  let net = 0, tax = 0;
+  for (const p of draft.positions) {
+    const line = (Number(p.quantity) || 0) * (Number(p.price_net) || 0);
+    net += line;
+    tax += line * (Number(p.tax_rate) || 0) / 100;
+  }
+  $("sum-net").textContent = euro.format(net);
+  $("sum-tax").textContent = euro.format(tax);
+  $("sum-gross").textContent = euro.format(net + tax);
+}
+
+function renderPreview() {
+  $("preview").hidden = false;
+  const hints = $("hints");
+  hints.innerHTML = "";
+  hints.hidden = !(draft.hints && draft.hints.length);
+  if (!hints.hidden) {
+    hints.append(el("strong", { textContent: "Bitte prüfen:" }), el("ul", {}, draft.hints.map((h) => el("li", { textContent: h }))));
+  }
+  renderContacts();
+  $("invoice_date").value = draft.invoice_date || new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD, lokale Zeit
+  $("delivery_date").value = draft.delivery_date || "";
+  $("time_to_pay").value = draft.time_to_pay ?? "";
+  $("header").value = draft.header || "";
+  renderPositions();
+  showMsg("create-msg");
+  $("preview").scrollIntoView({ behavior: "smooth" });
+}
+
+$("add-pos").onclick = () => {
+  const defaultUnit = meta.units[0] ? meta.units[0].id : 1;
+  draft.positions.push({ name: "", description: "", quantity: 1, unit_id: defaultUnit, price_net: 0, tax_rate: 19 });
+  renderPositions();
+};
+
+// ---------- Aktionen ----------
+$("parse").onclick = async () => {
+  if (listening) { setListening(false); recognition.stop(); }
+  const text = $("text").value.trim();
+  if (!text) { showMsg("parse-msg", "error", "Bitte zuerst etwas diktieren oder eintippen."); return; }
+  $("parse").disabled = true;
+  $("parse").textContent = "Wird ausgewertet …";
+  showMsg("parse-msg");
+  try {
+    if (!meta.units.length) meta = await api("/api/meta");
+    draft = await api("/api/parse", { method: "POST", body: JSON.stringify({ text }) });
+    renderPreview();
+  } catch (e) {
+    showMsg("parse-msg", "error", e.message);
+  } finally {
+    $("parse").disabled = false;
+    $("parse").textContent = "Auswerten";
+  }
+};
+
+$("create").onclick = async () => {
+  const contactId = Number($("contact").value);
+  if (!contactId) { showMsg("create-msg", "error", "Bitte einen Kunden auswählen."); return; }
+  if (!draft.positions.length) { showMsg("create-msg", "error", "Bitte mindestens eine Position anlegen."); return; }
+  if (draft.positions.some((p) => !String(p.name || "").trim())) { showMsg("create-msg", "error", "Jede Position braucht eine Bezeichnung."); return; }
+
+  const payload = {
+    contact_id: contactId,
+    invoice_date: $("invoice_date").value || null,
+    delivery_date: $("delivery_date").value || null,
+    time_to_pay: $("time_to_pay").value === "" ? null : Number($("time_to_pay").value),
+    header: $("header").value.trim() || null,
+    head_text: draft.head_text || null,
+    foot_text: draft.foot_text || null,
+    positions: draft.positions.map((p) => ({
+      name: p.name.trim(), description: (p.description || "").trim() || null,
+      quantity: Number(p.quantity), unit_id: Number(p.unit_id), price_net: Number(p.price_net), tax_rate: Number(p.tax_rate),
+    })),
+  };
+
+  $("create").disabled = true;
+  $("create").textContent = "Wird angelegt …";
+  try {
+    const result = await api("/api/invoice", { method: "POST", body: JSON.stringify(payload) });
+    showMsg("create-msg", "ok", "Entwurf angelegt" + (result.invoiceNumber ? " (" + result.invoiceNumber + ")" : "") + ".", result.url);
+  } catch (e) {
+    showMsg("create-msg", "error", e.message);
+  } finally {
+    $("create").disabled = false;
+    $("create").textContent = "Als Entwurf in sevDesk anlegen";
+  }
+};
+</script>
+</body>
+</html>
