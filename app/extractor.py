@@ -4,8 +4,10 @@ import json
 from datetime import date
 
 import anthropic
+import httpx
 
 MODEL = "claude-opus-5-5"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 WEEKDAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
 SYSTEM_PROMPT = """Du bist ein Assistent, der aus diktierten Notizen (deutsch, oft umgangssprachlich und \
@@ -61,15 +63,48 @@ class ExtractionError(Exception):
     pass
 
 
-def extract_invoice(client: anthropic.Anthropic, spoken_text: str, units: list[dict], today: date | None = None) -> dict:
-    today = today or date.today()
+def build_user_message(spoken_text: str, units: list[dict], today: date) -> str:
     unit_names = ", ".join(u["name"] for u in units)
-    user_message = (
+    return (
         f"Heute ist {WEEKDAYS[today.weekday()]}, der {today.isoformat()}.\n"
         f"Verfügbare Einheiten: {unit_names}\n\n"
         f"Diktat:\n{spoken_text}"
     )
 
+
+def extract_with_ollama(http: httpx.Client, model: str, spoken_text: str, units: list[dict], today: date | None = None) -> dict:
+    """Lokale KI über Ollama (kostenlos, läuft auf dem eigenen Rechner)."""
+    today = today or date.today()
+    try:
+        response = http.post("/api/chat", json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_user_message(spoken_text, units, today)},
+            ],
+            "format": INVOICE_SCHEMA,
+            "stream": False,
+            "keep_alive": "30m",
+            "options": {"temperature": 0},
+        })
+    except httpx.ConnectError as e:
+        raise ExtractionError("Ollama läuft nicht. Bitte Ollama starten (Symbol in der Taskleiste).") from e
+    except httpx.TimeoutException as e:
+        raise ExtractionError("Die lokale KI hat zu lange gebraucht. Bitte nochmal versuchen.") from e
+    if response.status_code == 404:
+        raise ExtractionError(f"KI-Modell fehlt. Bitte einmal ausführen: ollama pull {model}")
+    if response.status_code >= 400:
+        raise ExtractionError(f"Ollama-Fehler ({response.status_code}): {response.text[:300]}")
+    try:
+        data = json.loads(response.json()["message"]["content"])
+    except (KeyError, ValueError) as e:
+        raise ExtractionError("Die lokale KI hat keine gültigen Daten geliefert. Bitte nochmal versuchen.") from e
+    return attach_unit_ids(normalize(data), units)
+
+
+def extract_with_claude(client: anthropic.Anthropic, spoken_text: str, units: list[dict], today: date | None = None) -> dict:
+    """Claude über die Anthropic-API (kostet ca. 1–2 Cent pro Rechnung)."""
+    today = today or date.today()
     try:
         response = client.beta.messages.create(
             model=MODEL,
@@ -78,7 +113,7 @@ def extract_invoice(client: anthropic.Anthropic, spoken_text: str, units: list[d
             fallbacks="default",
             output_config={"effort": "low", "format": {"type": "json_schema", "schema": INVOICE_SCHEMA}},
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            messages=[{"role": "user", "content": build_user_message(spoken_text, units, today)}],
         )
     except anthropic.AuthenticationError as e:
         raise ExtractionError("Der Anthropic-API-Schlüssel ist ungültig.") from e
@@ -97,8 +132,7 @@ def extract_invoice(client: anthropic.Anthropic, spoken_text: str, units: list[d
     text = next((b.text for b in response.content if b.type == "text"), None)
     if text is None:
         raise ExtractionError("Claude hat keine Daten zurückgegeben.")
-    data = json.loads(text)
-    return attach_unit_ids(data, units)
+    return attach_unit_ids(normalize(json.loads(text)), units)
 
 
 def attach_unit_ids(data: dict, units: list[dict]) -> dict:
@@ -109,3 +143,50 @@ def attach_unit_ids(data: dict, units: list[dict]) -> dict:
         position["unit"] = unit["name"]
         position["unit_id"] = unit["id"]
     return data
+
+
+def _number(value, default: float) -> float:
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+
+
+def _iso_date(value) -> str | None:
+    try:
+        return date.fromisoformat(str(value)).isoformat() if value else None
+    except ValueError:
+        return None
+
+
+def normalize(data: dict) -> dict:
+    """Bereinigt die KI-Ausgabe, damit auch kleinere lokale Modelle eine gültige Vorschau ergeben."""
+    hints = [str(h) for h in data.get("hints") or [] if h]
+    positions = []
+    for p in data.get("positions") or []:
+        if not isinstance(p, dict) or not str(p.get("name") or "").strip():
+            continue
+        tax_rate = _number(p.get("tax_rate"), 19)
+        if tax_rate not in (0, 7, 19):
+            hints.append(f"Ungewöhnlicher Steuersatz {tax_rate:g} % bei „{p['name']}“ wurde auf 19 % gesetzt.")
+            tax_rate = 19
+        positions.append({
+            "name": str(p["name"]).strip(),
+            "description": str(p.get("description") or "").strip() or None,
+            "quantity": _number(p.get("quantity"), 1),
+            "unit": str(p.get("unit") or ""),
+            "price_net": round(_number(p.get("price_net"), 0), 2),
+            "tax_rate": tax_rate,
+        })
+    time_to_pay = data.get("time_to_pay")
+    return {
+        "customer_name": str(data.get("customer_name") or "").strip(),
+        "invoice_date": _iso_date(data.get("invoice_date")),
+        "delivery_date": _iso_date(data.get("delivery_date")),
+        "header": data.get("header") or None,
+        "head_text": data.get("head_text") or None,
+        "foot_text": data.get("foot_text") or None,
+        "time_to_pay": int(_number(time_to_pay, 0)) if time_to_pay not in (None, "") else None,
+        "positions": positions,
+        "hints": hints,
+    }

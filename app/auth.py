@@ -1,7 +1,8 @@
-"""Login per Passwort (APP_PASSWORD) mit signiertem Sitzungs-Cookie und Sperre nach Fehlversuchen."""
+"""Zugriffsschutz: nur aus dem eigenen Netz, Login per Passwort (APP_PASSWORD), Sperre nach Fehlversuchen."""
 
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import time
@@ -48,11 +49,27 @@ def valid_session(token: str | None, password: str) -> bool:
 
 
 def client_ip(request: Request) -> str:
-    # Render hängt die echte Client-IP hinten an X-Forwarded-For an; vordere Einträge kann der Client fälschen.
+    # X-Forwarded-For nur hinter einem eigenen Proxy beachten (TRUST_PROXY=1), sonst könnte jeder ihn fälschen.
+    # Der Proxy hängt die echte Client-IP hinten an; vordere Einträge stammen vom Client.
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
+    if forwarded and os.environ.get("TRUST_PROXY") == "1":
         return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unbekannt"
+
+
+def is_local_network(ip: str) -> bool:
+    """True für Geräte im eigenen WLAN/LAN (z. B. 192.168.x.x) und für den Rechner selbst."""
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if address.version == 6 and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_private or address.is_loopback or address.is_link_local
+
+
+def lan_only_enabled() -> bool:
+    return os.environ.get("LAN_ONLY", "1") != "0"
 
 
 def _recent_failures(ip: str) -> list[float]:
@@ -66,7 +83,9 @@ def is_locked(ip: str) -> bool:
     return len(_recent_failures(ip)) >= MAX_FAILURES
 
 
-async def require_login(request: Request, call_next):
+async def access_control(request: Request, call_next):
+    if lan_only_enabled() and not is_local_network(client_ip(request)):
+        return Response("Zugriff nur aus dem eigenen WLAN/LAN.", status_code=403, media_type="text/plain; charset=utf-8")
     if request.url.path in PUBLIC_PATHS:
         return await call_next(request)
     password = _password()

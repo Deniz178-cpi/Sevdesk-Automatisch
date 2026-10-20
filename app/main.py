@@ -1,20 +1,22 @@
 """Web-App: Rechnung diktieren -> Vorschau prüfen -> Entwurf in sevDesk anlegen."""
 
 import os
+from collections.abc import Callable
 from functools import lru_cache
 
 import anthropic
+import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.auth import require_login, router as auth_router
-from app.extractor import ExtractionError, extract_invoice
+from app.auth import access_control, router as auth_router
+from app.extractor import DEFAULT_OLLAMA_MODEL, ExtractionError, extract_with_claude, extract_with_ollama
 from app.paths import STATIC_DIR
 from app.sevdesk import SevdeskClient, SevdeskError
 
 app = FastAPI(title="sevDesk Rechnungs-Diktat")
-app.middleware("http")(require_login)
+app.middleware("http")(access_control)
 app.include_router(auth_router)
 
 
@@ -27,8 +29,17 @@ def get_sevdesk() -> SevdeskClient:
 
 
 @lru_cache
-def get_claude() -> anthropic.Anthropic:
-    return anthropic.Anthropic()
+def get_extractor() -> Callable[[str, list[dict]], dict]:
+    """KI für die Auswertung: AI_PROVIDER=ollama (Standard, lokal und kostenlos) oder claude."""
+    provider = os.environ.get("AI_PROVIDER", "ollama").lower()
+    if provider == "claude":
+        claude = anthropic.Anthropic()
+        return lambda text, units: extract_with_claude(claude, text, units)
+    if provider == "ollama":
+        http = httpx.Client(base_url=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"), timeout=300)
+        model = os.environ.get("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+        return lambda text, units: extract_with_ollama(http, model, text, units)
+    raise HTTPException(500, f"Unbekannter AI_PROVIDER: {provider}")
 
 
 class ParseRequest(BaseModel):
@@ -75,11 +86,11 @@ def meta(sevdesk: SevdeskClient = Depends(get_sevdesk)):
 
 
 @app.post("/api/parse")
-def parse(req: ParseRequest, sevdesk: SevdeskClient = Depends(get_sevdesk), claude: anthropic.Anthropic = Depends(get_claude)):
+def parse(req: ParseRequest, sevdesk: SevdeskClient = Depends(get_sevdesk), extract=Depends(get_extractor)):
     if not req.text.strip():
         raise HTTPException(400, "Es wurde nichts diktiert.")
     try:
-        draft = extract_invoice(claude, req.text, sevdesk.units())
+        draft = extract(req.text, sevdesk.units())
         matches = sevdesk.match_contacts(draft.get("customer_name", ""))
     except ExtractionError as e:
         raise HTTPException(502, str(e))

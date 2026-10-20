@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth, main
-from app.extractor import extract_invoice
+from app.extractor import extract_with_claude, extract_with_ollama, normalize
 from app.sevdesk import BASE_URL, SevdeskClient, SevdeskError, build_invoice_payload
 
 CONTACTS = [
@@ -70,6 +70,13 @@ def password(monkeypatch):
     auth._failures.clear()
 
 
+LAN_CLIENT = ("192.168.1.20", 50000)
+
+
+def lan_client() -> TestClient:
+    return TestClient(main.app, client=LAN_CLIENT)
+
+
 def login(http: TestClient, password: str = "geheim"):
     return http.post("/login", data={"password": password}, follow_redirects=False)
 
@@ -80,8 +87,8 @@ def client():
     sevdesk = fake_sevdesk(captured)
     claude = FakeClaude(EXTRACTED)
     main.app.dependency_overrides[main.get_sevdesk] = lambda: sevdesk
-    main.app.dependency_overrides[main.get_claude] = lambda: claude
-    http = TestClient(main.app)
+    main.app.dependency_overrides[main.get_extractor] = lambda: (lambda text, units: extract_with_claude(claude, text, units))
+    http = lan_client()
     assert login(http).headers["location"] == "/"
     yield http, captured, claude
     main.app.dependency_overrides.clear()
@@ -98,7 +105,7 @@ def test_contact_matching_finds_partial_names():
 def test_extract_maps_units_and_sends_date():
     claude = FakeClaude(EXTRACTED)
     units = [{"id": 1, "name": "Stk"}, {"id": 9, "name": "Std"}, {"id": 7, "name": "pauschal"}]
-    result = extract_invoice(claude, "5 Stunden Webdesign ...", units, today=date(2026, 10, 20))
+    result = extract_with_claude(claude, "5 Stunden Webdesign ...", units, today=date(2026, 10, 20))
     assert [p["unit_id"] for p in result["positions"]] == [9, 7]
     call = claude.calls[0]
     assert call["model"] == "claude-opus-5-5"
@@ -148,7 +155,7 @@ def test_payload_requires_contact_and_positions():
 
 
 def test_requires_login():
-    http = TestClient(main.app)
+    http = lan_client()
     assert http.get("/healthz").status_code == 200
     assert http.get("/", follow_redirects=False).headers["location"] == "/login"
     assert http.post("/api/parse", json={"text": "x"}).status_code == 401
@@ -160,13 +167,13 @@ def test_requires_login():
 
 def test_app_is_closed_without_password(monkeypatch):
     monkeypatch.delenv("APP_PASSWORD")
-    http = TestClient(main.app)
+    http = lan_client()
     assert http.get("/").status_code == 503
     assert http.post("/api/invoice", json={}).status_code == 503
 
 
 def test_lockout_after_failed_attempts():
-    http = TestClient(main.app)
+    http = lan_client()
     for _ in range(auth.MAX_FAILURES - 1):
         assert login(http, "falsch").headers["location"] == "/login?fehler=falsch"
     assert login(http, "falsch").headers["location"] == "/login?fehler=gesperrt"
@@ -190,3 +197,74 @@ def test_forged_or_expired_session_rejected():
     assert not auth.valid_session("9999999999.abc", "geheim")
     assert not auth.valid_session(auth.make_session("geheim", now=0), "geheim")
     assert auth.valid_session(auth.make_session("geheim"), "geheim")
+
+
+def test_blocks_devices_outside_local_network(monkeypatch):
+    internet = TestClient(main.app, client=("8.8.8.8", 50000))
+    assert internet.get("/login").status_code == 403
+    assert login(internet).status_code == 403
+    assert internet.get("/healthz").status_code == 403
+    # Gefälschter X-Forwarded-For-Header hilft nicht, solange TRUST_PROXY nicht gesetzt ist.
+    assert internet.get("/login", headers={"X-Forwarded-For": "192.168.1.5"}).status_code == 403
+    for ip in ("127.0.0.1", "10.0.0.7", "172.16.0.3", "fd00::5"):
+        assert TestClient(main.app, client=(ip, 50000)).get("/login").status_code == 200
+    monkeypatch.setenv("LAN_ONLY", "0")
+    assert internet.get("/login").status_code == 200
+
+
+def test_ollama_extraction_and_errors():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        if body["model"] == "fehlt":
+            return httpx.Response(404, json={"error": "model not found"})
+        messy = {**EXTRACTED, "time_to_pay": "14", "invoice_date": "kein Datum",
+                 "positions": [{"name": "Webdesign", "quantity": "5", "unit": "std", "price_net": "80,5", "tax_rate": 16},
+                               {"name": "", "quantity": 1}]}
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": json.dumps(messy)}, "done": True})
+
+    http = httpx.Client(base_url="http://ollama", transport=httpx.MockTransport(handler))
+    units = [{"id": 1, "name": "Stk"}, {"id": 9, "name": "Std"}]
+    result = extract_with_ollama(http, "qwen2.5:7b", "Diktat", units, today=date(2026, 10, 20))
+    assert seen[0]["stream"] is False and seen[0]["format"]["type"] == "object"
+    assert result["time_to_pay"] == 14 and result["invoice_date"] is None
+    assert result["positions"] == [{"name": "Webdesign", "description": None, "quantity": 5.0, "unit": "Std",
+                                    "unit_id": 9, "price_net": 80.5, "tax_rate": 19}]
+    assert any("16 %" in h for h in result["hints"])
+
+    from app.extractor import ExtractionError
+    with pytest.raises(ExtractionError, match="ollama pull fehlt"):
+        extract_with_ollama(http, "fehlt", "Diktat", units)
+
+    def offline(request):
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(ExtractionError, match="Ollama läuft nicht"):
+        extract_with_ollama(httpx.Client(base_url="http://ollama", transport=httpx.MockTransport(offline)), "m", "x", units)
+
+
+def test_normalize_handles_garbage():
+    assert normalize({})["positions"] == []
+    assert normalize({"positions": ["kaputt", {"name": "A", "quantity": None}]})["positions"][0]["quantity"] == 1
+
+
+def test_start_creates_certificate_for_lan_ip(tmp_path, monkeypatch):
+    import start
+    monkeypatch.setattr(start, "CERT_DIR", tmp_path)
+    monkeypatch.setattr(start, "CERT_FILE", tmp_path / "cert.pem")
+    monkeypatch.setattr(start, "KEY_FILE", tmp_path / "key.pem")
+    assert not start.cert_covers("192.168.1.20")
+    start.create_cert("192.168.1.20")
+    assert start.cert_covers("192.168.1.20")
+    assert not start.cert_covers("192.168.1.99")
+
+    env = tmp_path / ".env"
+    env.write_text("# Kommentar\nFOO_TEST=bar\nQUOTED_TEST=\"x y\"\n", encoding="utf-8")
+    monkeypatch.delenv("FOO_TEST", raising=False)
+    monkeypatch.delenv("QUOTED_TEST", raising=False)
+    start.load_env(env)
+    assert start.os.environ["FOO_TEST"] == "bar" and start.os.environ["QUOTED_TEST"] == "x y"
+    monkeypatch.delenv("FOO_TEST")
+    monkeypatch.delenv("QUOTED_TEST")
