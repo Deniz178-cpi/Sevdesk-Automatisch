@@ -2,20 +2,22 @@
 
 import os
 from collections.abc import Callable
+from datetime import date
 from functools import lru_cache
+from typing import Literal
 
 import anthropic
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.auth import access_control, router as auth_router
 from app.extractor import DEFAULT_OLLAMA_MODEL, ExtractionError, extract_with_claude, extract_with_ollama
 from app.paths import STATIC_DIR
 from app.sevdesk import SevdeskClient, SevdeskError
 
-app = FastAPI(title="sevDesk Rechnungs-Diktat")
+app = FastAPI(title="sevDesk Rechnungs-Diktat", docs_url=None, redoc_url=None, openapi_url=None)
 app.middleware("http")(access_control)
 app.include_router(auth_router)
 
@@ -43,27 +45,29 @@ def get_extractor() -> Callable[[str, list[dict]], dict]:
 
 
 class ParseRequest(BaseModel):
-    text: str
+    text: str = Field(max_length=5000)
 
 
 class Position(BaseModel):
-    name: str
-    description: str | None = None
-    quantity: float
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    name: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=5000)
+    quantity: float = Field(gt=0)
     unit_id: int
     price_net: float
-    tax_rate: float = 19
+    tax_rate: Literal[0, 7, 19] = 19
 
 
 class InvoiceDraft(BaseModel):
     contact_id: int
-    invoice_date: str | None = None
-    delivery_date: str | None = None
-    header: str | None = None
-    head_text: str | None = None
-    foot_text: str | None = None
-    time_to_pay: int | None = None
-    positions: list[Position]
+    invoice_date: date | None = None
+    delivery_date: date | None = None
+    header: str | None = Field(default=None, max_length=500)
+    head_text: str | None = Field(default=None, max_length=5000)
+    foot_text: str | None = Field(default=None, max_length=5000)
+    time_to_pay: int | None = Field(default=None, ge=0, le=365)
+    positions: list[Position] = Field(min_length=1, max_length=100)
 
 
 @app.get("/")
@@ -104,6 +108,6 @@ def parse(req: ParseRequest, sevdesk: SevdeskClient = Depends(get_sevdesk), extr
 @app.post("/api/invoice")
 def create_invoice(draft: InvoiceDraft, sevdesk: SevdeskClient = Depends(get_sevdesk)):
     try:
-        return sevdesk.create_draft_invoice(draft.model_dump())
+        return sevdesk.create_draft_invoice(draft.model_dump(mode="json"))
     except SevdeskError as e:
         raise HTTPException(502, str(e))

@@ -197,6 +197,8 @@ Dein Handy muss im **selben WLAN** sein wie der PC, nicht im Gast-WLAN und nicht
 4. Tippe auf **„Als Entwurf in sevDesk anlegen“**.
 5. Über den Link **„In sevDesk öffnen →“** siehst du den Entwurf direkt in sevDesk. Dort prüfst du ihn und versendest ihn wie gewohnt.
 
+> ⚠️ **Bei der ersten Rechnung bitte unbedingt prüfen:** Stimmt der **Bruttobetrag in sevDesk** mit dem Bruttobetrag in der Vorschau der App überein? sevDesk kann so eingestellt sein, dass Preise als brutto statt netto gelten. Weicht der Betrag um 19 % ab, sag dem Entwickler Bescheid.
+
 ### Tipps zum Sprechen
 
 - **Kunde:** Nenne ihn so, wie er in sevDesk heißt. Ein Teil reicht, z. B. „Müller“.
@@ -261,6 +263,7 @@ Oben rechts in der App auf **„Abmelden“** tippen.
 |---|---|
 | **Seite lädt nicht / „nicht erreichbar“** | 1. Läuft das schwarze Fenster am PC? 2. Ist das Handy im **selben WLAN** (nicht Gast-WLAN, nicht mobile Daten)? 3. Hast du **`https://`** und **`:8443`** eingegeben? 4. Firewall: Windows-Taste → `Firewall` → **„App über die Windows-Firewall kommunizieren lassen“** → bei **Python** den Haken bei **„Privat“** setzen. |
 | **Adresse geht plötzlich nicht mehr** | Der PC hat eine neue Adresse bekommen. Schau im schwarzen Fenster nach der neuen Adresse und richte die **feste Adresse** ein (siehe [Im Alltag](#10-im-alltag)). |
+| **Im schwarzen Fenster stehen mehrere Adressen („oder: …“)** | Probiere zuerst die Adresse hinter „Am Handy“. Klappt sie nicht, nimm die nächste. Mehrere Adressen gibt es z. B. bei aktivem VPN oder wenn der PC über Kabel **und** WLAN verbunden ist. |
 | **„Zugriff nur aus dem eigenen WLAN/LAN“** | Du bist nicht im Heim-WLAN. Bei manchen Handys hilft es, **„Mobile Daten“** kurz auszuschalten. |
 | **Sicherheitswarnung kommt wieder** | Normal, wenn sich die Adresse des PCs geändert hat. Einfach wieder bestätigen. |
 | **Mikrofon-Knopf fehlt oder reagiert nicht** | **Android:** Chrome → ⋮ → Einstellungen → Website-Einstellungen → Mikrofon → erlauben. **iPhone:** Einstellungen → Allgemein → Tastatur → **„Diktierfunktion“ aktivieren**. **Firefox** kann keine Spracherkennung, nutze Chrome bzw. Safari. **Immer möglich:** Ins Textfeld tippen und die **Mikrofon-Taste der Tastatur** benutzen. |

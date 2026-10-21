@@ -14,7 +14,11 @@ if not exist ".venv\Scripts\python.exe" (
   echo Erster Start: richte alles ein, das dauert einen Moment ...
   py -3 -m venv .venv || goto fehler
 )
-".venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check -r requirements.txt || goto fehler
+fc /b "requirements.txt" ".venv\installed-requirements.txt" >nul 2>nul
+if errorlevel 1 (
+  ".venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check -r requirements.txt || goto fehler
+  copy /y "requirements.txt" ".venv\installed-requirements.txt" >nul
+)
 
 if not exist ".env" (
   copy ".env.example" ".env" >nul

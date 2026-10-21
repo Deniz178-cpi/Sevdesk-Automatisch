@@ -1,6 +1,7 @@
 """Wandelt gesprochenen Text mit Claude in strukturierte Rechnungsdaten um."""
 
 import json
+import math
 from datetime import date
 
 import anthropic
@@ -132,7 +133,11 @@ def extract_with_claude(client: anthropic.Anthropic, spoken_text: str, units: li
     text = next((b.text for b in response.content if b.type == "text"), None)
     if text is None:
         raise ExtractionError("Claude hat keine Daten zurückgegeben.")
-    return attach_unit_ids(normalize(json.loads(text)), units)
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        raise ExtractionError("Claude hat keine gültigen Daten geliefert. Bitte nochmal versuchen.") from e
+    return attach_unit_ids(normalize(data), units)
 
 
 def attach_unit_ids(data: dict, units: list[dict]) -> dict:
@@ -147,9 +152,10 @@ def attach_unit_ids(data: dict, units: list[dict]) -> dict:
 
 def _number(value, default: float) -> float:
     try:
-        return float(str(value).replace(",", "."))
+        number = float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+    return number if math.isfinite(number) else default
 
 
 def _iso_date(value) -> str | None:
@@ -159,11 +165,19 @@ def _iso_date(value) -> str | None:
         return None
 
 
+def _text(value) -> str | None:
+    return value.strip() or None if isinstance(value, str) else None
+
+
 def normalize(data: dict) -> dict:
     """Bereinigt die KI-Ausgabe, damit auch kleinere lokale Modelle eine gültige Vorschau ergeben."""
-    hints = [str(h) for h in data.get("hints") or [] if h]
+    if not isinstance(data, dict):
+        data = {}
+    raw_hints = data.get("hints")
+    hints = [str(h) for h in raw_hints if h] if isinstance(raw_hints, list) else []
     positions = []
-    for p in data.get("positions") or []:
+    raw_positions = data.get("positions")
+    for p in raw_positions if isinstance(raw_positions, list) else []:
         if not isinstance(p, dict) or not str(p.get("name") or "").strip():
             continue
         tax_rate = _number(p.get("tax_rate"), 19)
@@ -183,10 +197,10 @@ def normalize(data: dict) -> dict:
         "customer_name": str(data.get("customer_name") or "").strip(),
         "invoice_date": _iso_date(data.get("invoice_date")),
         "delivery_date": _iso_date(data.get("delivery_date")),
-        "header": data.get("header") or None,
-        "head_text": data.get("head_text") or None,
-        "foot_text": data.get("foot_text") or None,
-        "time_to_pay": int(_number(time_to_pay, 0)) if time_to_pay not in (None, "") else None,
+        "header": _text(data.get("header")),
+        "head_text": _text(data.get("head_text")),
+        "foot_text": _text(data.get("foot_text")),
+        "time_to_pay": max(0, int(_number(time_to_pay, 0))) if time_to_pay not in (None, "") else None,
         "positions": positions,
         "hints": hints,
     }

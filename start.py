@@ -36,37 +36,45 @@ def load_env(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def lan_ip() -> str | None:
-    """IP-Adresse dieses Rechners im WLAN/LAN (es werden dabei keine Daten verschickt)."""
+def lan_ips() -> list[str]:
+    """IP-Adressen dieses Rechners im Heimnetz, wahrscheinlichste zuerst (es werden keine Daten verschickt)."""
+    candidates = []
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("192.0.2.1", 80))
-            ip = s.getsockname()[0]
-        return ip if ipaddress.ip_address(ip).is_private else None
+            candidates.append(s.getsockname()[0])
     except OSError:
-        return None
+        pass
+    try:
+        candidates += socket.gethostbyname_ex(socket.gethostname())[2]
+    except OSError:
+        pass
+    result = []
+    for ip in candidates:
+        address = ipaddress.ip_address(ip)
+        if address.is_private and not address.is_loopback and not address.is_link_local and ip not in result:
+            result.append(ip)
+    return result
 
 
-def cert_covers(ip: str | None) -> bool:
+def cert_covers(ips: list[str]) -> bool:
     if not (CERT_FILE.exists() and KEY_FILE.exists()):
         return False
     cert = x509.load_pem_x509_certificate(CERT_FILE.read_bytes())
     if cert.not_valid_after_utc < datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30):
         return False
-    if ip is None:
-        return True
     names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    return ipaddress.ip_address(ip) in names.get_values_for_type(x509.IPAddress)
+    covered = names.get_values_for_type(x509.IPAddress)
+    return all(ipaddress.ip_address(ip) in covered for ip in ips)
 
 
-def create_cert(ip: str | None) -> None:
+def create_cert(ips: list[str]) -> None:
     """Selbst signiertes Zertifikat, damit der Browser das Mikrofon freigibt (nur über HTTPS erlaubt)."""
     CERT_DIR.mkdir(exist_ok=True)
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Rechnung diktieren")])
     alt_names = [x509.DNSName("localhost"), x509.DNSName(socket.gethostname()), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
-    if ip:
-        alt_names.append(x509.IPAddress(ipaddress.ip_address(ip)))
+    alt_names += [x509.IPAddress(ipaddress.ip_address(ip)) for ip in ips]
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
@@ -102,7 +110,12 @@ def ensure_ollama() -> bool:
     if model in installed or f"{model}:latest" in installed:
         return True
     print(f"\n  Lade das KI-Modell {model} (ca. 5 GB, nur beim ersten Mal) ...\n")
-    if subprocess.run(["ollama", "pull", model]).returncode != 0:
+    try:
+        result = subprocess.run(["ollama", "pull", model])
+    except FileNotFoundError:
+        print(f"\n  Bitte einmal in der Eingabeaufforderung ausführen: ollama pull {model}\n")
+        return False
+    if result.returncode != 0:
         print("\n  Der Download hat nicht geklappt. Bitte Internetverbindung prüfen und start.bat erneut starten.\n")
         return False
     return True
@@ -116,16 +129,16 @@ def main() -> None:
     if os.environ.get("AI_PROVIDER", "ollama").lower() == "ollama" and not ensure_ollama():
         return
 
-    ip = lan_ip()
-    if not cert_covers(ip):
-        create_cert(ip)
+    ips = lan_ips()
+    if not cert_covers(ips):
+        create_cert(ips)
         print("  Neues Zertifikat erstellt. Am Handy einmal die Sicherheitswarnung bestätigen.")
 
     print("\n  ==============================================")
     print("   Rechnung diktieren läuft!")
     print(f"   Am PC:    https://localhost:{PORT}")
-    if ip:
-        print(f"   Am Handy: https://{ip}:{PORT}")
+    for index, ip in enumerate(ips):
+        print(f"   {'Am Handy: ' if index == 0 else 'oder:     '}https://{ip}:{PORT}")
     print("   (Handy muss im selben WLAN sein)")
     print("   Beenden: dieses Fenster schließen")
     print("  ==============================================\n")

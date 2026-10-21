@@ -255,10 +255,10 @@ def test_start_creates_certificate_for_lan_ip(tmp_path, monkeypatch):
     monkeypatch.setattr(start, "CERT_DIR", tmp_path)
     monkeypatch.setattr(start, "CERT_FILE", tmp_path / "cert.pem")
     monkeypatch.setattr(start, "KEY_FILE", tmp_path / "key.pem")
-    assert not start.cert_covers("192.168.1.20")
-    start.create_cert("192.168.1.20")
-    assert start.cert_covers("192.168.1.20")
-    assert not start.cert_covers("192.168.1.99")
+    assert not start.cert_covers(["192.168.1.20"])
+    start.create_cert(["192.168.1.20", "10.8.0.2"])
+    assert start.cert_covers(["192.168.1.20"]) and start.cert_covers(["192.168.1.20", "10.8.0.2"])
+    assert not start.cert_covers(["192.168.1.99"])
 
     env = tmp_path / ".env"
     env.write_text("# Kommentar\nFOO_TEST=bar\nQUOTED_TEST=\"x y\"\n", encoding="utf-8")
@@ -295,3 +295,66 @@ def test_start_checks_ollama(monkeypatch):
     monkeypatch.setattr(start.httpx, "get", offline)
     monkeypatch.setattr(start.shutil, "which", lambda name: None)
     assert not start.ensure_ollama()
+
+
+def test_invoice_rejects_invalid_input_with_422(client):
+    http, captured, _ = client
+    base = {"contact_id": 11, "positions": [{"name": "A", "quantity": 1, "unit_id": 1, "price_net": 10, "tax_rate": 19}]}
+    bad_variants = [
+        {**base, "invoice_date": "kein-datum"},
+        {**base, "time_to_pay": -3},
+        {**base, "positions": []},
+        {**base, "positions": [{**base["positions"][0], "quantity": 0}]},
+        {**base, "positions": [{**base["positions"][0], "tax_rate": 16}]},
+        {**base, "positions": [{**base["positions"][0], "name": ""}]},
+    ]
+    for body in bad_variants:
+        assert http.post("/api/invoice", json=body).status_code == 422, body
+    assert captured == []
+    assert http.post("/api/parse", json={"text": "x" * 5001}).status_code == 422
+    assert http.get("/docs").status_code == 404
+
+
+def test_sevdesk_network_and_auth_errors_become_readable():
+    def offline(request):
+        raise httpx.ConnectError("down")
+
+    client = SevdeskClient("t", http=httpx.Client(base_url=BASE_URL, transport=httpx.MockTransport(offline)))
+    with pytest.raises(SevdeskError, match="Keine Verbindung"):
+        client.contacts()
+    assert client.units()[0]["name"] == "Stk"  # Einheiten fallen auf Standardwerte zurück
+
+    unauthorized = SevdeskClient("t", http=httpx.Client(base_url=BASE_URL, transport=httpx.MockTransport(lambda r: httpx.Response(401))))
+    with pytest.raises(SevdeskError, match="API-Token"):
+        unauthorized.contacts()
+
+
+def test_contacts_are_paginated(monkeypatch):
+    import app.sevdesk as sevdesk_module
+    monkeypatch.setattr(sevdesk_module, "PAGE_SIZE", 2)
+    all_contacts = [{"id": str(i), "name": f"Kunde {i}"} for i in range(5)]
+
+    def handler(request):
+        offset = int(request.url.params["offset"])
+        return httpx.Response(200, json={"objects": all_contacts[offset:offset + 2]})
+
+    client = SevdeskClient("t", http=httpx.Client(base_url=BASE_URL, transport=httpx.MockTransport(handler)))
+    assert [c["id"] for c in client.contacts()] == [0, 1, 2, 3, 4]
+
+
+def test_normalize_survives_unexpected_shapes():
+    assert normalize(["kein", "dict"])["positions"] == []
+    result = normalize({"hints": "ein string", "positions": "kaputt", "time_to_pay": -5, "header": 42,
+                        "customer_name": None})
+    assert result["hints"] == [] and result["positions"] == [] and result["time_to_pay"] == 0
+    assert result["header"] is None and result["customer_name"] == ""
+    pos = normalize({"positions": [{"name": "A", "quantity": "nan", "price_net": "inf"}]})["positions"][0]
+    assert pos["quantity"] == 1 and pos["price_net"] == 0
+
+
+def test_login_rejects_oversized_body():
+    http = lan_client()
+    response = http.post("/login", content=b"password=" + b"a" * 10000,
+                         headers={"Content-Type": "application/x-www-form-urlencoded"}, follow_redirects=False)
+    assert response.headers["location"] == "/login?fehler=falsch"
+    assert auth.valid_session("ä.ö", "geheim") is False

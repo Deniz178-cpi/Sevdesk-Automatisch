@@ -128,7 +128,11 @@ if (!Recognition) {
     $("text").value = (baseText + " " + interim).trim();
   };
   recognition.onerror = (event) => {
-    if (event.error === "not-allowed") showMsg("parse-msg", "error", "Mikrofon-Zugriff wurde verweigert. Bitte in den Browser-Einstellungen erlauben.");
+    // Bei fehlender Berechtigung nicht endlos neu starten (onend würde sonst sofort wieder start() aufrufen).
+    if (event.error === "not-allowed" || event.error === "service-not-allowed" || event.error === "audio-capture") {
+      setListening(false);
+      showMsg("parse-msg", "error", "Kein Zugriff aufs Mikrofon. Bitte in den Browser-Einstellungen erlauben oder die Mikrofon-Taste der Tastatur nutzen.");
+    }
   };
   recognition.onend = () => {
     // Manche Browser beenden die Erkennung nach einer Pause von selbst – dann weitermachen.
@@ -171,7 +175,11 @@ async function api(path, options = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
   if (res.status === 401) { location.href = "/login"; throw new Error("Bitte neu anmelden."); }
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.detail ? (typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail)) : "Fehler " + res.status);
+  if (!res.ok) {
+    if (typeof body.detail === "string") throw new Error(body.detail);
+    if (Array.isArray(body.detail)) throw new Error("Bitte Eingaben prüfen: " + body.detail.map((d) => (d.loc || []).slice(1).join(" → ") + ": " + d.msg).join("; "));
+    throw new Error("Fehler " + res.status);
+  }
   return body;
 }
 
@@ -258,6 +266,8 @@ function renderPreview() {
   $("header").value = draft.header || "";
   renderPositions();
   showMsg("create-msg");
+  $("create").disabled = false;
+  $("create").textContent = "Als Entwurf in sevDesk anlegen";
   $("preview").scrollIntoView({ behavior: "smooth" });
 }
 
@@ -292,6 +302,7 @@ $("create").onclick = async () => {
   if (!contactId) { showMsg("create-msg", "error", "Bitte einen Kunden auswählen."); return; }
   if (!draft.positions.length) { showMsg("create-msg", "error", "Bitte mindestens eine Position anlegen."); return; }
   if (draft.positions.some((p) => !String(p.name || "").trim())) { showMsg("create-msg", "error", "Jede Position braucht eine Bezeichnung."); return; }
+  if (draft.positions.some((p) => !(Number(p.quantity) > 0))) { showMsg("create-msg", "error", "Jede Position braucht eine Menge größer als 0."); return; }
 
   const payload = {
     contact_id: contactId,
@@ -312,9 +323,10 @@ $("create").onclick = async () => {
   try {
     const result = await api("/api/invoice", { method: "POST", body: JSON.stringify(payload) });
     showMsg("create-msg", "ok", "Entwurf angelegt" + (result.invoiceNumber ? " (" + result.invoiceNumber + ")" : "") + ".", result.url);
+    // Gesperrt lassen, damit dieselbe Rechnung nicht versehentlich doppelt angelegt wird.
+    $("create").textContent = "✓ Angelegt";
   } catch (e) {
     showMsg("create-msg", "error", e.message);
-  } finally {
     $("create").disabled = false;
     $("create").textContent = "Als Entwurf in sevDesk anlegen";
   }

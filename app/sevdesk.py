@@ -8,6 +8,7 @@ import httpx
 
 BASE_URL = "https://my.sevdesk.de/api/v1"
 CACHE_SECONDS = 300
+PAGE_SIZE = 1000
 
 # Wird verwendet, falls /Unity nicht abgerufen werden kann (Standard-Einheiten von sevDesk).
 FALLBACK_UNITS = [
@@ -29,10 +30,18 @@ class SevdeskClient:
         self._cache: dict[str, tuple[float, object]] = {}
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
-        response = self._http.request(method, path, **kwargs)
+        try:
+            response = self._http.request(method, path, **kwargs)
+        except httpx.HTTPError as e:
+            raise SevdeskError("Keine Verbindung zu sevDesk. Bitte Internetverbindung prüfen.") from e
+        if response.status_code == 401:
+            raise SevdeskError("sevDesk lehnt den API-Token ab. Bitte SEVDESK_API_TOKEN in der .env prüfen.")
         if response.status_code >= 400:
             raise SevdeskError(f"sevDesk {method} {path} fehlgeschlagen ({response.status_code}): {response.text[:500]}")
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as e:
+            raise SevdeskError(f"sevDesk hat eine unerwartete Antwort geschickt ({response.status_code}).") from e
 
     def _cached(self, key: str, loader):
         hit = self._cache.get(key)
@@ -48,11 +57,16 @@ class SevdeskClient:
         """Alle Kontakte (Organisationen und Personen) als {id, name, customerNumber}."""
 
         def load():
-            data = self._request("GET", "/Contact", params={"depth": 1, "limit": 1000})
-            return [
-                {"id": int(c["id"]), "name": contact_display_name(c), "customerNumber": c.get("customerNumber")}
-                for c in data.get("objects", [])
-            ]
+            contacts, offset = [], 0
+            while True:
+                page = self._request("GET", "/Contact", params={"depth": 1, "limit": PAGE_SIZE, "offset": offset}).get("objects", [])
+                contacts += [
+                    {"id": int(c["id"]), "name": contact_display_name(c), "customerNumber": c.get("customerNumber")}
+                    for c in page
+                ]
+                if len(page) < PAGE_SIZE:
+                    return contacts
+                offset += PAGE_SIZE
 
         return self._cached("contacts", load)
 
@@ -60,7 +74,7 @@ class SevdeskClient:
         def load():
             try:
                 data = self._request("GET", "/Unity")
-            except (SevdeskError, httpx.HTTPError):
+            except SevdeskError:
                 return FALLBACK_UNITS
             units = [{"id": int(u["id"]), "name": u.get("name") or u.get("translationCode", "")} for u in data.get("objects", [])]
             return units or FALLBACK_UNITS

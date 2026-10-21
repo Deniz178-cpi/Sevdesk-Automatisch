@@ -18,6 +18,7 @@ SESSION_SECONDS = 30 * 24 * 3600
 MAX_FAILURES = 5
 LOCK_SECONDS = 15 * 60
 PUBLIC_PATHS = {"/login", "/healthz"}
+MAX_LOGIN_BODY = 4096
 
 # IP -> Zeitpunkte der letzten Fehlversuche (nur im Speicher, reicht für eine Einzelperson-App).
 _failures: dict[str, list[float]] = {}
@@ -45,7 +46,7 @@ def valid_session(token: str | None, password: str) -> bool:
         return False
     expires, signature = token.split(".", 1)
     expected = hmac.new(_signing_key(password), expires.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(signature, expected) and expires.isdigit() and int(expires) > time.time()
+    return hmac.compare_digest(signature.encode(), expected.encode()) and expires.isdigit() and int(expires) > time.time()
 
 
 def client_ip(request: Request) -> str:
@@ -112,7 +113,12 @@ async def login(request: Request):
     if is_locked(ip):
         return RedirectResponse("/login?fehler=gesperrt", status_code=303)
 
-    form = parse_qs((await request.body()).decode(errors="replace"))
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > MAX_LOGIN_BODY:
+            return RedirectResponse("/login?fehler=falsch", status_code=303)
+    form = parse_qs(body.decode(errors="replace"))
     given = (form.get("password") or [""])[0]
     if not secrets.compare_digest(given.encode(), password.encode()):
         _failures.setdefault(ip, []).append(time.time())
