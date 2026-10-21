@@ -58,7 +58,8 @@ Ollama ist ein Programm, das die KI direkt auf deinem PC laufen lässt. Dadurch 
 1. Öffne **[ollama.com/download](https://ollama.com/download)**.
 2. Wähle **Windows** und klicke auf **„Download for Windows“**.
 3. Öffne die heruntergeladene Datei `OllamaSetup.exe` und klicke auf **„Install“**.
-4. Danach läuft Ollama im Hintergrund. Du erkennst es an einem kleinen **Lama-Symbol** unten rechts in der Taskleiste. Eventuell steckt es hinter dem kleinen Pfeil `^`.
+4. Eventuell öffnet sich ein Ollama-Fenster mit einer Liste **„Apps“** (Claude Code, Codex CLI, …). **Dort nichts auswählen.** Diese Apps brauchst du nicht, schließe das Fenster einfach mit dem **X**.
+5. Danach läuft Ollama im Hintergrund. Du erkennst es an einem kleinen **Lama-Symbol** unten rechts in der Taskleiste. Eventuell steckt es hinter dem kleinen Pfeil `^`.
 
 Das KI-Modell selbst musst du **nicht** von Hand herunterladen. Das macht die App beim ersten Start automatisch.
 
