@@ -3,14 +3,19 @@
 import datetime
 import ipaddress
 import os
+import shutil
 import socket
+import subprocess
 from pathlib import Path
 
+import httpx
 import uvicorn
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
+
+from app.extractor import DEFAULT_OLLAMA_MODEL
 
 ROOT = Path(__file__).parent
 CERT_DIR = ROOT / "certs"
@@ -78,10 +83,37 @@ def create_cert(ip: str | None) -> None:
     CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
 
 
+def ensure_ollama() -> bool:
+    """Prüft, ob Ollama läuft und das KI-Modell da ist; lädt das Modell beim ersten Mal automatisch."""
+    url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+    model = os.environ.get("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    try:
+        tags = httpx.get(f"{url}/api/tags", timeout=5).json()
+    except (httpx.HTTPError, ValueError):
+        if shutil.which("ollama") is None:
+            print("\n  Ollama ist nicht installiert.")
+            print("  Bitte von https://ollama.com/download installieren und start.bat erneut starten.\n")
+        else:
+            print("\n  Ollama ist installiert, läuft aber nicht.")
+            print("  Bitte Ollama über das Startmenü öffnen und start.bat erneut starten.\n")
+        return False
+
+    installed = {m.get("name") for m in tags.get("models", [])} | {m.get("model") for m in tags.get("models", [])}
+    if model in installed or f"{model}:latest" in installed:
+        return True
+    print(f"\n  Lade das KI-Modell {model} (ca. 5 GB, nur beim ersten Mal) ...\n")
+    if subprocess.run(["ollama", "pull", model]).returncode != 0:
+        print("\n  Der Download hat nicht geklappt. Bitte Internetverbindung prüfen und start.bat erneut starten.\n")
+        return False
+    return True
+
+
 def main() -> None:
     load_env(ROOT / ".env")
     if not os.environ.get("APP_PASSWORD") or not os.environ.get("SEVDESK_API_TOKEN"):
         print("\n  Bitte zuerst die Datei .env ausfüllen (SEVDESK_API_TOKEN und APP_PASSWORD).\n")
+        return
+    if os.environ.get("AI_PROVIDER", "ollama").lower() == "ollama" and not ensure_ollama():
         return
 
     ip = lan_ip()

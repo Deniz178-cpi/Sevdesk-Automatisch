@@ -268,3 +268,30 @@ def test_start_creates_certificate_for_lan_ip(tmp_path, monkeypatch):
     assert start.os.environ["FOO_TEST"] == "bar" and start.os.environ["QUOTED_TEST"] == "x y"
     monkeypatch.delenv("FOO_TEST")
     monkeypatch.delenv("QUOTED_TEST")
+
+
+def test_start_checks_ollama(monkeypatch):
+    import start
+
+    class FakeResponse:
+        def __init__(self, models):
+            self._models = models
+
+        def json(self):
+            return {"models": self._models}
+
+    pulled = []
+    monkeypatch.setattr(start.subprocess, "run", lambda cmd: pulled.append(cmd) or SimpleNamespace(returncode=0))
+
+    monkeypatch.setattr(start.httpx, "get", lambda *a, **k: FakeResponse([{"name": "qwen2.5:7b", "model": "qwen2.5:7b"}]))
+    assert start.ensure_ollama() and pulled == []
+
+    monkeypatch.setattr(start.httpx, "get", lambda *a, **k: FakeResponse([]))
+    assert start.ensure_ollama() and pulled == [["ollama", "pull", "qwen2.5:7b"]]
+
+    def offline(*a, **k):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(start.httpx, "get", offline)
+    monkeypatch.setattr(start.shutil, "which", lambda name: None)
+    assert not start.ensure_ollama()

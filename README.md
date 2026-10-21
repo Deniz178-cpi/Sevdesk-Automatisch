@@ -21,40 +21,16 @@ Was die App annimmt:
 - Die Rechnungsadresse kommt aus dem sevDesk-Kontakt.
 - Ohne genanntes Rechnungsdatum gilt heute.
 
-## Einrichtung unter Windows (einmalig, ca. 15 Minuten)
+## Einrichtung
 
-Dein PC sollte **mindestens 16 GB Arbeitsspeicher** haben. Mit 8 GB geht es auch, ist aber langsamer.
+👉 **Schritt-für-Schritt-Anleitung für Windows: [ANLEITUNG.md](ANLEITUNG.md)**, inklusive Handy-Einrichtung und Hilfe bei Problemen.
 
-1. **Python installieren:** [python.org/downloads](https://www.python.org/downloads/). Im Installer unbedingt **„Add python.exe to PATH“** ankreuzen.
-2. **Ollama installieren:** [ollama.com/download](https://ollama.com/download) → Windows. Danach läuft Ollama im Hintergrund (Lama-Symbol in der Taskleiste).
-3. **KI-Modell laden:** Eingabeaufforderung öffnen (Windows-Taste → `cmd`) und eingeben:
-   ```
-   ollama pull qwen2.5:7b
-   ```
-   Der Download ist ca. 5 GB groß und wird nur einmal benötigt.
-4. **App herunterladen:** Auf GitHub oben auf **Code → Download ZIP**, dann die ZIP-Datei entpacken, z. B. nach `Dokumente\Rechnung-diktieren`.
-5. **`start.bat` doppelklicken.** Beim ersten Start wird alles eingerichtet, und es öffnet sich die Datei `.env` im Editor. Trag dort ein und speichere:
-   - `SEVDESK_API_TOKEN=`: dein Token aus sevDesk → Einstellungen → Benutzer → API-Token
-   - `APP_PASSWORD=`: ein Passwort deiner Wahl (mindestens 16 Zeichen)
-6. **`start.bat` nochmal doppelklicken.** Fragt die **Windows-Firewall**, ob der Zugriff erlaubt werden soll, wähle **„Private Netzwerke“** und klicke auf Zulassen.
-
-Das Fenster zeigt dir jetzt die Adressen, z. B.:
-```
-Am PC:    https://localhost:8443
-Am Handy: https://192.168.178.25:8443
-```
-
-## Benutzung am Handy
-
-1. Handy ins **selbe WLAN** wie den PC.
-2. Die angezeigte Adresse **mit `https://`** öffnen.
-3. Beim ersten Mal kommt eine **Sicherheitswarnung**. Das ist normal, denn das Zertifikat hat die App selbst erstellt, nicht eine offizielle Stelle. Tippe auf „Erweitert“ → „Weiter zu …“ (Chrome) bzw. „Details einblenden“ → „Website besuchen“ (Safari). Das ist nur einmal nötig.
-4. Mit deinem `APP_PASSWORD` anmelden.
-5. Tipp: Über „Zum Home-Bildschirm hinzufügen“ hast du die App wie eine normale App.
-
-Die App ist nur erreichbar, solange `start.bat` läuft. Zum Beenden schließt du einfach das Fenster.
-
-**Falls der Handy-Browser das Mikrofon trotzdem nicht freigibt:** Tippe ins Textfeld und nutze die **Mikrofon-Taste der Handy-Tastatur**. Das funktioniert immer.
+Kurzfassung:
+1. [Python](https://www.python.org/downloads/) (mit „Add python.exe to PATH“) und [Ollama](https://ollama.com/download) installieren.
+2. Projekt als ZIP herunterladen und entpacken.
+3. `start.bat` doppelklicken und in `.env` den `SEVDESK_API_TOKEN` und das `APP_PASSWORD` eintragen.
+4. `start.bat` erneut starten. Beim ersten Mal wird das KI-Modell automatisch geladen.
+5. Die angezeigte Adresse `https://…:8443` am Handy im selben WLAN öffnen.
 
 ## Sicherheit
 
@@ -69,7 +45,7 @@ Die App ist nur erreichbar, solange `start.bat` läuft. Zum Beenden schließt du
 | Einstellung | Bedeutung |
 |---|---|
 | `AI_PROVIDER` | `ollama` (Standard, lokal, kostenlos) oder `claude` (Anthropic-API, genauer, ca. 1–2 Cent pro Rechnung, braucht `ANTHROPIC_API_KEY`) |
-| `OLLAMA_MODEL` | Lokales Modell, Standard `qwen2.5:7b`. Auf schwachen PCs geht auch `qwen2.5:3b`, das ist schneller, aber ungenauer (vorher `ollama pull qwen2.5:3b`) |
+| `OLLAMA_MODEL` | Lokales Modell, Standard `qwen2.5:7b`. Auf schwachen PCs geht auch `qwen2.5:3b`, das ist schneller, aber ungenauer. Ein neues Modell wird beim Start automatisch geladen |
 | `LAN_ONLY` | `1` = nur Heimnetz (Standard), `0` = keine Netz-Beschränkung |
 
 ## Browser
@@ -85,7 +61,7 @@ pytest
 ```
 
 Aufbau:
-- `start.py` / `start.bat`: Start im Heimnetz mit HTTPS-Zertifikat
+- `start.py` / `start.bat`: Start im Heimnetz, HTTPS-Zertifikat, Ollama-Prüfung und Modell-Download
 - `app/main.py`: Web-Server (FastAPI)
 - `app/auth.py`: Nur-Heimnetz, Login, Sperre nach Fehlversuchen
 - `app/extractor.py`: Diktat → Rechnungsdaten (Ollama oder Claude)
